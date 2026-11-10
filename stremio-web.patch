@@ -1,0 +1,299 @@
+diff --git a/src/common/downloadClient.js b/src/common/downloadClient.js
+new file mode 100644
+index 0000000..91cdf3f
+--- /dev/null
++++ b/src/common/downloadClient.js
+@@ -0,0 +1,77 @@
++// Copyright (C) 2017-2023 Smart code 203358507
++
++/**
++ * Client for the "Stremio -> qBittorrent" bridge that runs on the PC.
++ *
++ * The bridge is a small local service that forwards the torrent of a stream to
++ * the qBittorrent instance running on the same machine and starts the
++ * download there.
++ *
++ * The endpoint is resolved in this order:
++ *  1. `window.STREMIO_DOWNLOAD_ENDPOINT` - injected by the bridge through
++ *     `/config.js`, so the address can be changed without rebuilding;
++ *  2. `localStorage.stremioDownloadEndpoint` - manual override;
++ *  3. `/api/download` on the current origin - works out of the box when the
++ *     bridge serves this very app.
++ */
++
++const DEFAULT_ENDPOINT = '/api/download';
++const STORAGE_KEY = 'stremioDownloadEndpoint';
++
++const getEndpoint = () => {
++    try {
++        if (typeof window !== 'undefined') {
++            if (typeof window.STREMIO_DOWNLOAD_ENDPOINT === 'string' && window.STREMIO_DOWNLOAD_ENDPOINT.length > 0) {
++                return window.STREMIO_DOWNLOAD_ENDPOINT;
++            }
++
++            const stored = window.localStorage.getItem(STORAGE_KEY);
++            if (typeof stored === 'string' && stored.length > 0) {
++                return stored;
++            }
++        }
++    } catch (error) {
++        // localStorage throws in some private browsing modes - use the default.
++    }
++
++    return DEFAULT_ENDPOINT;
++};
++
++/**
++ * Ask the bridge to start the download of a torrent stream on the PC.
++ *
++ * @param {object} payload
++ * @param {string} payload.magnet            magnet link of the torrent
++ * @param {string} [payload.infoHash]        info hash of the torrent
++ * @param {number} [payload.fileIdx]         index of the wanted file in the torrent
++ * @param {string[]} [payload.fileMustInclude] name fragments of the wanted file
++ * @param {string} [payload.title]           display name of the stream
++ * @returns {Promise<object>} the bridge answer
++ */
++const sendToDownloadClient = async (payload) => {
++    const endpoint = getEndpoint();
++
++    const response = await fetch(endpoint, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify(payload),
++    });
++
++    let result = null;
++
++    try {
++        result = await response.json();
++    } catch (error) {
++        // The bridge answered with something that is not JSON.
++    }
++
++    if (!response.ok || !result || result.ok === false) {
++        const message = (result && result.error) || `the PC bridge answered with ${response.status}`;
++
++        throw new Error(message);
++    }
++
++    return result;
++};
++
++module.exports = { sendToDownloadClient, getEndpoint, DEFAULT_ENDPOINT, STORAGE_KEY };
+diff --git a/src/routes/MetaDetails/StreamsList/Stream/Stream.js b/src/routes/MetaDetails/StreamsList/Stream/Stream.js
+index 911f080..c860048 100644
+--- a/src/routes/MetaDetails/StreamsList/Stream/Stream.js
++++ b/src/routes/MetaDetails/StreamsList/Stream/Stream.js
+@@ -10,10 +10,11 @@ const { useProfile, usePlatform, useToast, useBinaryState } = require('stremio/c
+ const { Button, Image, Popup } = require('stremio/components');
+ const ActionButton = require('stremio/components/MetaPreview/ActionButton');
+ const { default: useRouteFocused } = require('stremio/common/useRouteFocused');
++const { sendToDownloadClient } = require('stremio/common/downloadClient');
+ const StreamPlaceholder = require('./StreamPlaceholder');
+ const styles = require('./styles');
+ 
+-const Stream = ({ className = '', compact = false, isEpg = false, videoId = undefined, videoReleased = undefined, addonName, name, description, thumbnail = undefined, progress, deepLinks, externalPlayerCallbackCanMarkWatched, ...props }) => {
++const Stream = ({ className = '', compact = false, isEpg = false, videoId = undefined, videoReleased = undefined, addonName, name, description, thumbnail = undefined, progress, deepLinks, externalPlayerCallbackCanMarkWatched, infoHash, fileIdx, fileMustInclude, ...props }) => {
+     const profile = useProfile();
+     const toast = useToast();
+     const platform = usePlatform();
+@@ -101,6 +102,52 @@ const Stream = ({ className = '', compact = false, isEpg = false, videoId = unde
+         return deepLinks?.externalPlayer?.magnet;
+     }, [deepLinks]);
+ 
++    // A stream that exposes a magnet link is a torrent, so it can be handed
++    // over to the torrent client running on the PC.
++    const isTorrent = React.useMemo(() => {
++        return typeof magnetLink === 'string' && magnetLink.length > 0;
++    }, [magnetLink]);
++
++    const showDownloadToPc = React.useMemo(() => {
++        return isTorrent && !compact && !isEpg;
++    }, [isTorrent, compact, isEpg]);
++
++    const downloadToPc = React.useCallback(async (event) => {
++        if (event) {
++            event.preventDefault();
++            event.stopPropagation();
++        }
++
++        closeMenu();
++
++        if (!magnetLink) return;
++
++        try {
++            const result = await sendToDownloadClient({
++                magnet: magnetLink,
++                infoHash: typeof infoHash === 'string' ? infoHash : undefined,
++                fileIdx: typeof fileIdx === 'number' ? fileIdx : null,
++                fileMustInclude: Array.isArray(fileMustInclude) ? fileMustInclude : [],
++                title: name || description || null,
++            });
++
++            toast.show({
++                type: 'success',
++                title: result && result.file ?
++                    `Downloading on your PC: ${result.file.name}`
++                    :
++                    'Downloading on your PC',
++                timeout: 4000,
++            });
++        } catch (error) {
++            toast.show({
++                type: 'error',
++                title: `Could not start the download: ${error.message}`,
++                timeout: 6000,
++            });
++        }
++    }, [magnetLink, infoHash, fileIdx, fileMustInclude, name, description, toast, closeMenu]);
++
+     const markVideoAsWatched = React.useCallback(() => {
+         if (typeof videoId === 'string') {
+             core.transport.dispatch({
+@@ -272,6 +319,13 @@ const Stream = ({ className = '', compact = false, isEpg = false, videoId = unde
+                             <div className={styles['context-menu-option-label']}>{t('CTX_COPY_MAGNET_LINK')}</div>
+                         </Button>
+                 }
++                {
++                    !isEpg && showDownloadToPc &&
++                        <Button className={styles['context-menu-option-container']} title={t('CTX_DOWNLOAD_TO_PC', { defaultValue: 'Download to PC' })} onClick={downloadToPc}>
++                            <Icon className={styles['menu-icon']} name={'download'} />
++                            <div className={styles['context-menu-option-label']}>{t('CTX_DOWNLOAD_TO_PC', { defaultValue: 'Download to PC' })}</div>
++                        </Button>
++                }
+                 {
+                     !isEpg && downloadLink &&
+                         <Button className={styles['context-menu-option-container']} title={t('CTX_DOWNLOAD_VIDEO')} onClick={copyDownloadLink}>
+@@ -281,7 +335,7 @@ const Stream = ({ className = '', compact = false, isEpg = false, videoId = unde
+                 }
+             </div>
+         );
+-    }, [copyStreamLink, onClick, isEpg, href, target, download]);
++    }, [copyStreamLink, onClick, isEpg, href, target, download, downloadToPc, showDownloadToPc]);
+ 
+     React.useEffect(() => {
+         if (!routeFocused) {
+@@ -289,7 +343,7 @@ const Stream = ({ className = '', compact = false, isEpg = false, videoId = unde
+         }
+     }, [routeFocused]);
+ 
+-    return (
++    const popup = (
+         <Popup
+             className={className}
+             onMouseUp={popupLabelOnMouseUp}
+@@ -303,6 +357,23 @@ const Stream = ({ className = '', compact = false, isEpg = false, videoId = unde
+             renderMenu={renderMenu}
+         />
+     );
++
++    if (!showDownloadToPc) {
++        return popup;
++    }
++
++    return (
++        <div className={classnames(styles['stream-wrapper'], styles['has-download'])}>
++            {popup}
++            <Button
++                className={styles['download-button']}
++                title={t('CTX_DOWNLOAD_TO_PC', { defaultValue: 'Download to PC' })}
++                onClick={downloadToPc}
++            >
++                <Icon className={styles['download-icon']} name={'download'} />
++            </Button>
++        </div>
++    );
+ };
+ 
+ Stream.Placeholder = StreamPlaceholder;
+@@ -337,6 +408,9 @@ Stream.propTypes = {
+         })
+     }),
+     externalPlayerCallbackCanMarkWatched: PropTypes.bool,
++    infoHash: PropTypes.string,
++    fileIdx: PropTypes.number,
++    fileMustInclude: PropTypes.arrayOf(PropTypes.string),
+     onClick: PropTypes.func
+ };
+ 
+diff --git a/src/routes/MetaDetails/StreamsList/Stream/styles.less b/src/routes/MetaDetails/StreamsList/Stream/styles.less
+index 9724ced..ca4444a 100644
+--- a/src/routes/MetaDetails/StreamsList/Stream/styles.less
++++ b/src/routes/MetaDetails/StreamsList/Stream/styles.less
+@@ -122,6 +122,47 @@
+     }
+ }
+ 
++// Wrapper that hosts the "Download to PC" button next to the stream row.
++.stream-wrapper {
++    position: relative;
++
++    .download-button {
++        position: absolute;
++        top: 50%;
++        // Sits right in front of the play icon, which is the last item of the row.
++        right: 4.4rem;
++        transform: translateY(-50%);
++        display: flex;
++        align-items: center;
++        justify-content: center;
++        width: 2.4rem;
++        height: 2.4rem;
++        padding: 0.55rem;
++        border-radius: 50%;
++        background-color: var(--secondary-accent-color);
++        color: var(--primary-foreground-color);
++        z-index: 1;
++
++        &:hover,
++        &:focus {
++            background-color: var(--primary-accent-color);
++            outline-style: solid;
++        }
++    }
++
++    .download-icon {
++        width: 100%;
++        height: 100%;
++    }
++}
++
++// Keep the description clear of the absolutely positioned download button.
++.stream-wrapper.has-download {
++    .description-container {
++        padding-right: 3rem;
++    }
++}
++
+ .context-menu-content {
+     --spatial-navigation-contain: contain;
+ 
+diff --git a/src/routes/MetaDetails/StreamsList/StreamsList.js b/src/routes/MetaDetails/StreamsList/StreamsList.js
+index b5d5b04..e1f8af5 100644
+--- a/src/routes/MetaDetails/StreamsList/StreamsList.js
++++ b/src/routes/MetaDetails/StreamsList/StreamsList.js
+@@ -194,6 +194,9 @@ const StreamsList = ({ className, video, type, externalPlayerCallbackCanMarkWatc
+                                             progress={stream.progress}
+                                             deepLinks={stream.deepLinks}
+                                             externalPlayerCallbackCanMarkWatched={externalPlayerCallbackCanMarkWatched}
++                                            infoHash={stream.infoHash}
++                                            fileIdx={stream.fileIdx}
++                                            fileMustInclude={stream.fileMustInclude}
+                                             onClick={stream.onClick}
+                                         />
+                                     ))}
+diff --git a/webpack.config.js b/webpack.config.js
+index 992e0ff..9ba7b3d 100644
+--- a/webpack.config.js
++++ b/webpack.config.js
+@@ -43,6 +43,9 @@ module.exports = (env, argv) => ({
+     output: {
+         path: path.join(__dirname, 'build'),
+         filename: `${COMMIT_HASH}/scripts/[name].js`,
++        // The bridge serves the app from the root of its own origin, so the
++        // assets have to be resolved from the root as well.
++        publicPath: '/',
+         clean: true,
+     },
+     module: {

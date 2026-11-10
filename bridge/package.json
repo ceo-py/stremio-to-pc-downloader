@@ -1,0 +1,14 @@
+{
+    "name": "stremio-qbittorrent-bridge",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Serves the modified Stremio web app and forwards torrent streams from it to a local qBittorrent instance.",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "engines": {
+        "node": ">=18"
+    },
+    "license": "gpl-2.0"
+}
