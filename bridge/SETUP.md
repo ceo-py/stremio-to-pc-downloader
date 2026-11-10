@@ -55,7 +55,7 @@ requests, so the browser can never talk to it directly.)
 ## 3. Start the bridge
 
 ```powershell
-cd "D:\MiniMax Code Repos\Stremio\bridge"
+cd "C:\Stremio\bridge"
 node server.js
 ```
 
@@ -67,7 +67,7 @@ It listens on `0.0.0.0:8787` and serves the built Stremio app on `/`.
 and still see what happened):
 
 ```powershell
-cd "D:\MiniMax Code Repos\Stremio\bridge"
+cd "C:\Stremio\bridge"
 Start-Process node -ArgumentList "server.js" -WorkingDirectory (Get-Location) `
     -RedirectStandardOutput bridge.log -RedirectStandardError bridge-error.log -WindowStyle Hidden
 ```
@@ -189,7 +189,7 @@ Bridge dashboard (torrents, recent downloads): <http://127.0.0.1:8787/bridge/>
 ## 8. Rebuilding the UI after a code change
 
 ```powershell
-cd "D:\MiniMax Code Repos\Stremio\stremio-web"
+cd "C:\Stremio\stremio-web"
 corepack pnpm build
 ```
 

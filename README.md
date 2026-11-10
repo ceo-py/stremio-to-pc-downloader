@@ -12,6 +12,8 @@ This repository contains:
 | `stremio-web.patch` | The exact diff against upstream `stremio-web` v5.0.0-beta.43, in case you want to re-apply it to a fresh clone. |
 | `bridge/SETUP.md` | Step-by-step installation for the PC and the phone. |
 
+GitHub: **`stremio-to-pc-downloader`** (public).
+
 ---
 
 ## 1. How it works
@@ -272,7 +274,36 @@ Development-only helper routes (`/dev/seed-test-addon`, `/dev/storage`,
 
 ---
 
-## 8. Licensing
+## 8. Publishing this repository
+
+The repository is a plain git repo on the `main` branch. To publish it as
+`stremio-to-pc-downloader` on GitHub:
+
+1. On GitHub, create an **empty** repository named `stremio-to-pc-downloader`
+   (public, *no* README / .gitignore / license — the content is already here).
+2. Point this checkout at it and push:
+
+```powershell
+cd "C:\Stremio"
+git remote add origin https://github.com/<your-user>/stremio-to-pc-downloader.git
+git push -u origin main
+```
+
+Git Credential Manager asks you to sign in to GitHub in the browser on the first
+push — no token has to be pasted anywhere.
+
+If you ever need to start over from upstream, the modified UI is also kept as
+`stremio-web.patch`:
+
+```powershell
+git clone --depth 1 https://github.com/Stremio/stremio-web.git
+cd stremio-web
+git apply ..\stremio-web.patch
+```
+
+---
+
+## 9. Licensing
 
 `stremio-web` is GPL-2.0 (© Stremio / Smart code 203358507) — the modified
 sources keep that license. `bridge/` is provided under the same terms.
